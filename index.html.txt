@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive CNC Production Schedule</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Chosen Palette: Slate & Amber -->
+    <!-- Application Structure Plan: The SPA is designed as a three-tiered dashboard for a production manager. Tier 1 (Top) provides high-level KPIs for an immediate overview of production health (utilization, fulfillment). Tier 2 (Middle) uses a tabbed interface for a machine-specific deep dive, allowing users to analyze the workload and schedule for each machine individually. This is more intuitive than a linear report. Tier 3 (Bottom) provides an interactive table to explore the fulfillment status of every part, with filters for status and type. This structure moves from a broad overview to granular detail, guiding the user through a logical analysis workflow. -->
+    <!-- Visualization & Content Choices: 
+        - Overall Stats (KPI cards): Report Info -> High-level summary. Goal -> Inform. Method -> Styled HTML cards. Interaction -> None. Justification -> Quick, scannable summary of the most critical metrics.
+        - Machine Utilization: Report Info -> Machine scheduled hours vs. capacity. Goal -> Compare. Method -> Donut Chart (Chart.js/Canvas). Interaction -> Tab clicks update chart. Justification -> Visually compelling representation of workload balance between machines.
+        - Machine Schedules: Report Info -> Parts assigned to each machine. Goal -> Organize. Method -> HTML Table. Interaction -> Dynamically updated on tab click. Justification -> Clear, detailed view of each machine's task list.
+        - Fulfillment Summary: Report Info -> Scheduled units vs. demand. Goal -> Organize/Analyze. Method -> Interactive HTML Table with filters. Interaction -> Dropdown filters update table view. Justification -> Empowers user to find specific information (e.g., "Show all past-due parts that are not fully met").
+    -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+    <style>
+        body {
+            background-color: #f1f5f9; /* slate-100 */
+        }
+        .tab-active {
+            background-color: #1e293b; /* slate-800 */
+            color: #ffffff;
+        }
+        .tab-inactive {
+            background-color: #cbd5e1; /* slate-300 */
+            color: #1e293b; /* slate-800 */
+        }
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 400px;
+            margin-left: auto;
+            margin-right: auto;
+            height: 300px;
+            max-height: 350px;
+        }
+        @media (min-width: 768px) {
+            .chart-container {
+                height: 350px;
+            }
+        }
+        .status-yes { background-color: #dcfce7; color: #166534; } /* green */
+        .status-no { background-color: #fee2e2; color: #991b1b; } /* red */
+        .status-partial { background-color: #fef3c7; color: #92400e; } /* amber */
+    </style>
+</head>
+<body class="font-sans">
+
+    <div class="container mx-auto p-4 md:p-8">
+
+        <header class="mb-8 text-center">
+            <h1 class="text-3xl md:text-4xl font-bold text-slate-800">CNC Production Schedule Dashboard</h1>
+            <p class="text-slate-600 mt-2">An interactive overview of monthly machine utilization and order fulfillment.</p>
+        </header>
+
+        <main>
+            <!-- Section 1: Production Overview -->
+            <section id="overview" class="mb-8 p-6 bg-white rounded-lg shadow-md">
+                <h2 class="text-2xl font-bold text-slate-700 mb-4 border-b pb-2">Monthly Production Summary</h2>
+                <p class="text-slate-600 mb-6">
+                    This section provides a high-level summary of the entire production schedule for the month. It highlights the overall machine workload, how many parts are being processed, and the success rate in meeting both past due and current demand based on the available capacity.
+                </p>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
+                    <div class="bg-slate-100 p-4 rounded-lg">
+                        <h3 class="text-lg font-semibold text-slate-600">Overall Machine Utilization</h3>
+                        <p id="kpi-utilization" class="text-3xl font-bold text-slate-800 mt-2">76.2%</p>
+                    </div>
+                    <div class="bg-slate-100 p-4 rounded-lg">
+                        <h3 class="text-lg font-semibold text-slate-600">Past Due Orders Fulfilled</h3>
+                        <p id="kpi-past-due" class="text-3xl font-bold text-slate-800 mt-2">83.3%</p>
+                    </div>
+                    <div class="bg-slate-100 p-4 rounded-lg">
+                        <h3 class="text-lg font-semibold text-slate-600">Current Demand Fulfilled</h3>
+                        <p id="kpi-current" class="text-3xl font-bold text-slate-800 mt-2">0%</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Section 2: Machine-Level Deep Dive -->
+            <section id="machine-details" class="mb-8 p-6 bg-white rounded-lg shadow-md">
+                <h2 class="text-2xl font-bold text-slate-700 mb-4 border-b pb-2">Machine-Specific Schedules</h2>
+                <p class="text-slate-600 mb-6">
+                    Analyze the workload and detailed production plan for each machine. Use the buttons below to switch between machines. The chart visualizes the utilization percentage (scheduled hours vs. total available hours), and the table lists every part assigned to that machine for the month. This helps identify bottlenecks and understand capacity allocation.
+                </p>
+                <div id="machine-tabs" class="flex justify-center space-x-2 mb-6">
+                    <button data-machine="L20" class="machine-tab tab-inactive py-2 px-4 rounded-md font-semibold transition-colors duration-300">Machine L20</button>
+                    <button data-machine="L25" class="machine-tab tab-active py-2 px-4 rounded-md font-semibold transition-colors duration-300">Machine L25</button>
+                    <button data-machine="L38" class="machine-tab tab-inactive py-2 px-4 rounded-md font-semibold transition-colors duration-300">Machine L38</button>
+                </div>
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
+                    <div class="chart-container">
+                        <canvas id="utilizationChart"></canvas>
+                    </div>
+                    <div>
+                        <h3 id="machine-schedule-title" class="text-xl font-bold text-slate-700 mb-4"></h3>
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full bg-white">
+                                <thead class="bg-slate-800 text-white">
+                                    <tr>
+                                        <th class="text-left py-2 px-3">Part #</th>
+                                        <th class="text-left py-2 px-3">Units Scheduled</th>
+                                        <th class="text-left py-2 px-3">Hours Scheduled</th>
+                                        <th class="text-left py-2 px-3">Type</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="machine-schedule-body" class="text-slate-700">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Section 3: Part Fulfillment Status -->
+            <section id="fulfillment-status" class="p-6 bg-white rounded-lg shadow-md">
+                <h2 class="text-2xl font-bold text-slate-700 mb-4 border-b pb-2">Part Fulfillment Status</h2>
+                 <p class="text-slate-600 mb-6">
+                    This table provides a comprehensive list of all parts and their production status for the month. Use the filters to drill down and analyze the data. You can check which orders have been completed, which are partially done, and which could not be scheduled due to capacity constraints. This is key to managing priorities and communicating with stakeholders.
+                </p>
+                <div class="flex flex-wrap gap-4 mb-4">
+                    <div>
+                        <label for="filter-status" class="block text-sm font-medium text-slate-700">Filter by Status:</label>
+                        <select id="filter-status" class="mt-1 block w-full md:w-auto pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-slate-500 focus:border-slate-500 sm:text-sm rounded-md">
+                            <option value="all">All</option>
+                            <option value="Yes">Fully Met</option>
+                            <option value="Partial">Partially Met</option>
+                            <option value="No">Not Met</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="filter-type" class="block text-sm font-medium text-slate-700">Filter by Type:</label>
+                        <select id="filter-type" class="mt-1 block w-full md:w-auto pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-slate-500 focus:border-slate-500 sm:text-sm rounded-md">
+                            <option value="all">All</option>
+                            <option value="Past Due">Past Due</option>
+                            <option value="Current">Current</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full bg-white">
+                        <thead class="bg-slate-800 text-white">
+                            <tr>
+                                <th class="text-left py-2 px-3">Part #</th>
+                                <th class="text-left py-2 px-3">Total Demand</th>
+                                <th class="text-left py-2 px-3">Scheduled Units</th>
+                                <th class="text-left py-2 px-3">Type</th>
+                                <th class="text-left py-2 px-3">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fulfillment-table-body" class="text-slate-700">
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+
+        <footer class="text-center mt-12 text-slate-500 text-sm">
+            <p>Generated from Monthly CNC Production Schedule Report. Current Date: July 30, 2025.</p>
+        </footer>
+
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const machineData = {
+                L20: { capacity: 440, scheduledHours: 100.63, schedule: [{ part: '26-1616-03', units: 2450, hours: 30.63, type: 'Past Due' }, { part: '26-1014-10', units: 2800, hours: 70.00, type: 'Past Due' }] },
+                L25: { capacity: 440, scheduledHours: 437.50, schedule: [{ part: '3689747', units: 10700, hours: 267.50, type: 'Past Due' }, { part: '26-1789-03', units: 6800, hours: 170.00, type: 'Past Due' }] },
+                L38: { capacity: 440, scheduledHours: 424.67, schedule: [{ part: '26-1156-03', units: 7400, hours: 174.67, type: 'Past Due' }, { part: '3696750', units: 10000, hours: 250.00, type: 'Past Due' }] }
+            };
+
+            const fulfillmentData = [
+                { part: '3689745', demand: 10500, scheduled: 0, type: 'Current', status: 'No' },
+                { part: '26-1789-03', demand: 10200, scheduled: 6800, type: 'Past Due', status: 'Partial' },
+                { part: '3696750', demand: 10000, scheduled: 10000, type: 'Past Due', status: 'Yes' },
+                { part: '26-1156-03', demand: 7400, scheduled: 7400, type: 'Past Due', status: 'Yes' },
+                { part: '23-1219-03', demand: 18250, scheduled: 0, type: 'Current', status: 'No' },
+                { part: '26-1014-10', demand: 2800, scheduled: 2800, type: 'Past Due', status: 'Yes' },
+                { part: '3689747', demand: 10700, scheduled: 10700, type: 'Past Due', status: 'Yes' },
+                { part: '26-1616-03', demand: 2450, scheduled: 2450, type: 'Past Due', status: 'Yes' }
+            ];
+
+            let utilizationChart;
+
+            function updateKPIs() {
+                const totalCapacity = Object.values(machineData).reduce((sum, m) => sum + m.capacity, 0);
+                const totalScheduled = Object.values(machineData).reduce((sum, m) => sum + m.scheduledHours, 0);
+                document.getElementById('kpi-utilization').textContent = `${((totalScheduled / totalCapacity) * 100).toFixed(1)}%`;
+
+                const pastDueOrders = fulfillmentData.filter(p => p.type === 'Past Due');
+                const pastDueMet = pastDueOrders.filter(p => p.status === 'Yes').length;
+                document.getElementById('kpi-past-due').textContent = `${((pastDueMet / pastDueOrders.length) * 100).toFixed(1)}%`;
+                
+                const currentOrders = fulfillmentData.filter(p => p.type === 'Current');
+                const currentMet = currentOrders.filter(p => p.status === 'Yes').length;
+                document.getElementById('kpi-current').textContent = `${currentOrders.length > 0 ? ((currentMet / currentOrders.length) * 100).toFixed(1) : '0.0'}%`;
+            }
+
+            function createOrUpdateChart(machineId) {
+                const data = machineData[machineId];
+                const utilization = (data.scheduledHours / data.capacity) * 100;
+                const remaining = 100 - utilization;
+                
+                const chartData = {
+                    labels: ['Scheduled Hours', 'Available Hours'],
+                    datasets: [{
+                        data: [utilization, remaining > 0 ? remaining : 0],
+                        backgroundColor: ['#1e293b', '#e2e8f0'], // slate-800, slate-200
+                        borderColor: '#f1f5f9', // slate-100
+                        borderWidth: 4,
+                    }]
+                };
+
+                const ctx = document.getElementById('utilizationChart').getContext('2d');
+                if (utilizationChart) {
+                    utilizationChart.data = chartData;
+                    utilizationChart.update();
+                } else {
+                    utilizationChart = new Chart(ctx, {
+                        type: 'doughnut',
+                        data: chartData,
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            cutout: '70%',
+                            plugins: {
+                                legend: {
+                                    display: false
+                                },
+                                tooltip: {
+                                    callbacks: {
+                                        label: function(context) {
+                                            let label = context.label || '';
+                                            if (label) {
+                                                label += ': ';
+                                            }
+                                            if (context.parsed !== null) {
+                                                label += `${context.parsed.toFixed(1)}%`;
+                                            }
+                                            return label;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+
+            function updateMachineSchedule(machineId) {
+                const data = machineData[machineId];
+                document.getElementById('machine-schedule-title').textContent = `Schedule for Machine ${machineId}`;
+                const tbody = document.getElementById('machine-schedule-body');
+                tbody.innerHTML = '';
+                if (data.schedule.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="4" class="text-center py-4">No parts scheduled for this machine.</td></tr>`;
+                    return;
+                }
+                data.schedule.forEach(item => {
+                    const row = `
+                        <tr class="border-b">
+                            <td class="py-2 px-3">${item.part}</td>
+                            <td class="py-2 px-3">${item.units.toLocaleString()}</td>
+                            <td class="py-2 px-3">${item.hours.toFixed(2)}</td>
+                            <td class="py-2 px-3">${item.type}</td>
+                        </tr>`;
+                    tbody.innerHTML += row;
+                });
+            }
+
+            function renderFulfillmentTable() {
+                const statusFilter = document.getElementById('filter-status').value;
+                const typeFilter = document.getElementById('filter-type').value;
+                
+                const filteredData = fulfillmentData.filter(item => {
+                    const statusMatch = (statusFilter === 'all') || (item.status === statusFilter);
+                    const typeMatch = (typeFilter === 'all') || (item.type === typeFilter);
+                    return statusMatch && typeMatch;
+                });
+
+                const tbody = document.getElementById('fulfillment-table-body');
+                tbody.innerHTML = '';
+
+                if (filteredData.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4">No data matches the selected filters.</td></tr>`;
+                    return;
+                }
+
+                filteredData.forEach(item => {
+                    let statusClass = '';
+                    let statusText = '';
+                    switch(item.status) {
+                        case 'Yes':
+                            statusClass = 'status-yes';
+                            statusText = 'Fully Met';
+                            break;
+                        case 'No':
+                            statusClass = 'status-no';
+                            statusText = 'Not Met';
+                            break;
+                        case 'Partial':
+                            statusClass = 'status-partial';
+                            statusText = 'Partially Met';
+                            break;
+                    }
+
+                    const row = `
+                        <tr class="border-b">
+                            <td class="py-2 px-3">${item.part}</td>
+                            <td class="py-2 px-3">${item.demand.toLocaleString()}</td>
+                            <td class="py-2 px-3">${item.scheduled.toLocaleString()}</td>
+                            <td class="py-2 px-3">${item.type}</td>
+                            <td class="py-2 px-3"><span class="inline-block w-full text-center rounded-full px-2 py-1 text-xs font-semibold ${statusClass}">${statusText}</span></td>
+                        </tr>`;
+                    tbody.innerHTML += row;
+                });
+            }
+
+            document.getElementById('machine-tabs').addEventListener('click', function(e) {
+                if (e.target.classList.contains('machine-tab')) {
+                    const machineId = e.target.dataset.machine;
+                    document.querySelectorAll('.machine-tab').forEach(tab => {
+                        tab.classList.remove('tab-active');
+                        tab.classList.add('tab-inactive');
+                    });
+                    e.target.classList.add('tab-active');
+                    e.target.classList.remove('tab-inactive');
+                    
+                    createOrUpdateChart(machineId);
+                    updateMachineSchedule(machineId);
+                }
+            });
+
+            document.getElementById('filter-status').addEventListener('change', renderFulfillmentTable);
+            document.getElementById('filter-type').addEventListener('change', renderFulfillmentTable);
+
+            function initializeDashboard() {
+                updateKPIs();
+                createOrUpdateChart('L25');
+                updateMachineSchedule('L25');
+                renderFulfillmentTable();
+            }
+
+            initializeDashboard();
+        });
+    </script>
+</body>
+</html>
